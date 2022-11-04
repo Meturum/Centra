@@ -1,6 +1,13 @@
-# Centra API
+# Centra
 
-Wrapper API for internal project, _Centre_.
+Centra is a Wrapper API for [Centre](),  
+
+## Documentation
+___
+
+Visit our official documentation! [(Click here)](https://docs.meturum.com/projects/centra/)
+
+JavaDocs: [(Click here)](https://docs.meturum.com/projects/centra/javadocs/)
 
 ## Usage (Maven)
 ___
@@ -18,7 +25,7 @@ Add the following to your _pom.xml_ file in your project:
 <dependency>
     <groupId>com.centra</groupId>
     <artifactId>centra-api</artifactId>
-    <version>{VERSION}</version>
+    <version>{VERSION}-SNAPSHOT</version>
 </dependency>
 ```
 
