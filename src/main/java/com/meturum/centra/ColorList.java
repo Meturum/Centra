@@ -1,7 +1,9 @@
 package com.meturum.centra;
 
 import com.meturum.centra.conversions.annotations.DocumentableMethod;
+import com.meturum.centra.system.SystemManager;
 import net.md_5.bungee.api.ChatColor;
+import org.jetbrains.annotations.NotNull;
 
 import java.awt.*;
 
@@ -101,7 +103,7 @@ public final class ColorList {
     }
 
     @DocumentableMethod
-    private static ColorList _fromString(String string) {
+    private static ColorList _fromString(@NotNull SystemManager manager, @NotNull String string) {
         return ColorList.of(string);
     }
 

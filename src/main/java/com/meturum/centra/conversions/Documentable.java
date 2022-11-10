@@ -3,7 +3,7 @@ package com.meturum.centra.conversions;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.meturum.centra.conversions.annotations.DocumentableMethod;
-import com.meturum.centra.mongo.IMongo;
+import com.meturum.centra.mongo.Mongo;
 import com.meturum.centra.system.SystemManager;
 import org.bson.Document;
 import org.jetbrains.annotations.NotNull;
@@ -150,16 +150,10 @@ public interface Documentable {
                             if(method == null) continue;
                             method.setAccessible(true);
 
-                            if (!method.isAnnotationPresent(DocumentableMethod.class))
+                            if (!method.isAnnotationPresent(DocumentableMethod.class) || !Arrays.asList(method.getParameterTypes()).contains(UUID.class))
                                 throw new NoSuchMethodException(); // False trigger catch block.
 
-                            for(Class<?> parametersTypes : method.getParameterTypes()) {
-                                if(!parametersTypes.equals(UUID.class))continue;
-
-                                Preconditions.checkArgument(value instanceof String, "Value must be a String");
-                                value = UUID.fromString((String) value);
-                            }
-
+                            if(value instanceof String) value = UUID.fromString((String) value);
                             if(setter == null) field.set(instance, invokeMethod(method, null, manager, value));
                             else invokeMethod(setter, instance, invokeMethod(method, null, manager, value));
                         } catch (NoSuchMethodException ignored) { }
@@ -191,11 +185,11 @@ public interface Documentable {
     static @NotNull <T> T fromDocument(@NotNull SystemManager manager, Document document, Class<? extends T> instance) throws Exception {
         T object;
 
-        boolean isAssignable = instance.isAssignableFrom(Documentable.class);
-        Constructor<? extends T> constructor = isAssignable ? instance.getConstructor(IMongo.class) : instance.getConstructor();
+        boolean isAssignable = Documentable.class.isAssignableFrom(instance);
+        Constructor<? extends T> constructor = isAssignable ? instance.getDeclaredConstructor(Mongo.class) : instance.getConstructor();
         constructor.setAccessible(true);
 
-        object = isAssignable ? constructor.newInstance(manager.search(IMongo.class)) : constructor.newInstance();
+        object = isAssignable ? constructor.newInstance(manager.search(Mongo.class)) : constructor.newInstance();
 
         insertDocument(manager, document, object);
         return object;

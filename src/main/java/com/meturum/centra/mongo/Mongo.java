@@ -3,7 +3,7 @@ package com.meturum.centra.mongo;
 import org.jetbrains.annotations.NotNull;
 import com.meturum.centra.system.System;
 
-public interface IMongo extends System {
+public interface Mongo extends System {
 
     /**
      * Searches for a collection by the specified name. If the collection does not exist, it will be created.
