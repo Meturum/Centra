@@ -21,4 +21,18 @@ public interface SystemManager {
      */
     boolean contains(Class<? extends System> clazz);
 
+    /**
+     * Starts all systems in the system manager.
+     *
+     * @throws Exception if an error occurs while starting a system.
+     */
+    void start() throws Exception;
+
+    /**
+     * Stops all systems in the system manager.
+     *
+     * @throws Exception if an error occurs while stopping a system.
+     */
+    void stop() throws Exception;
+
 }

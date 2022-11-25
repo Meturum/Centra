@@ -1,5 +1,6 @@
 package com.meturum.centra.conversions;
 
+import com.meturum.centra.conversions.annotations.DocumentableMethod;
 import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
@@ -109,6 +110,9 @@ public interface IDynamicTag extends Documentable {
      * @apiNote This method is equivalent to {@code IDynamicTag#saveAsync(null, false)}. the variable {@code upsert} is set to false.
      */
     void saveAsync();
+
+    @DocumentableMethod
+    String serialize();
 
     interface SaveLambda {
         void run(boolean saved);

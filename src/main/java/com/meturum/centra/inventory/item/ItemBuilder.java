@@ -8,7 +8,7 @@ import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
 
-public final class ItemBuilder {
+public class ItemBuilder {
 
     private final ItemStack bukkitItem;
 

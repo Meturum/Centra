@@ -1,6 +1,8 @@
 package com.meturum.centra.sessions;
 
 import com.meturum.centra.conversions.IDynamicTag;
+import com.meturum.centra.conversions.annotations.DocumentableMethod;
+import com.meturum.centra.system.SystemManager;
 import org.jetbrains.annotations.NotNull;
 
 public interface GameProfile extends IDynamicTag {

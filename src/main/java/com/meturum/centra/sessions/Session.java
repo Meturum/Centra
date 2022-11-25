@@ -1,5 +1,7 @@
 package com.meturum.centra.sessions;
 
+import com.meturum.centra.conversions.IDynamicTag;
+import com.meturum.centra.input.SignTextInput;
 import com.meturum.centra.sessions.ranks.Rank;
 import org.bson.Document;
 import org.bukkit.entity.Player;
@@ -8,7 +10,7 @@ import org.jetbrains.annotations.NotNull;
 import javax.annotation.Nullable;
 import java.util.UUID;
 
-public interface Session {
+public interface Session extends IDynamicTag {
 
     /**
      * Gets the player associated with this session.
@@ -43,7 +45,7 @@ public interface Session {
      *
      * @param rank the rank to set.
      */
-    void setRank(@Nullable Rank rank);
+    void setRank(@NotNull Rank rank);
 
     /**
      * Gets the profiles associated with this session.
@@ -114,5 +116,19 @@ public interface Session {
      * @return true if the profile was removed, false otherwise.
      */
     boolean removeProfile(@NotNull GameProfile profile);
+
+    /**
+     * Gets the currently active sign text input.
+     *
+     * @return the active sign text input.
+     */
+    @Nullable SignTextInput getTextInput();
+
+    /**
+     * Creates a new sign text input for this session.
+     *
+     * @return the new sign text input.
+     */
+    @Nullable SignTextInput createTextInput();
 
 }

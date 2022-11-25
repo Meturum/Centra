@@ -1,97 +1,96 @@
 package com.meturum.centra.conversions;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.meturum.centra.conversions.annotations.DocumentableMethod;
 import com.meturum.centra.mongo.Mongo;
+import com.meturum.centra.system.System;
 import com.meturum.centra.system.SystemManager;
 import org.bson.Document;
 import org.jetbrains.annotations.NotNull;
 
 import javax.annotation.Nullable;
 import java.lang.annotation.*;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.*;
+import java.lang.reflect.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 
 public interface Documentable {
 
     /**
-     * @param instance The object to serialize.
+     * @param object The object to serialize.
      *
      * @return a {@link Document} containing all the selected fields of the given {@link Object}
      */
-    static Document toDocument(@NotNull Object instance) {
-        Preconditions.checkArgument(instance instanceof Documentable, "Object (instance) must be an instance of Documentable");
+    static @NotNull Document toDocument(@NotNull final Documentable object) {
+        final Class<?> clazz = object.getClass();
+        final Document document = new Document();
 
-        // Get the serialization type from the class. If it is not found, default to ALL.
-        Document document = new Document();
-
-        List<Field> filteredFields = getTrueFields(instance.getClass());
-        for(Field field : filteredFields) {
-            field.setAccessible(true);
-
+        List<Field> fields = getFields(clazz);
+        for (final Field field : fields) { // iterate through all fields
             try {
-                Object value = field.get(instance);
+                field.setAccessible(true);
 
-                if(value == null) {
-                    document.put(field.getName(), null);
-                    continue;
+                final Object value = field.get(object);
+                Object serialized = value;
+                if(value == null) continue; // skip null values
+
+                final boolean isArray = field.getType().isArray();
+                final boolean isList = List.class.isAssignableFrom(field.getType());
+
+                final Serialize serializeAnnotation = field.isAnnotationPresent(Serialize.class) ? field.getAnnotation(Serialize.class) : null;
+                final SerializationMethod serializationMethod = serializeAnnotation != null ? serializeAnnotation.method() : SerializationMethod.OBJECT;
+                final Class<?> type = serializeAnnotation != null ?
+                        serializeAnnotation.type() != Object.class ? serializeAnnotation.type() : field.getType()
+                        : field.getType();
+                final boolean saveTags = serializeAnnotation == null || serializeAnnotation.save();
+
+                if(isArray) {
+                    serialized = Arrays.asList((Object[]) value); // convert array to list
+                } else if (!isList) { // if not a list,
+                    serialized = List.of(value); // convert single value to list
                 }
 
-                if (isPrimitive(field.getType())) {
-                    document.put(field.getName(), value);
-                    continue;
+                // Attempt to find Documentable#toX() method...
+                Method method = Arrays.stream(type.getDeclaredMethods()).filter(m -> m.getName().equalsIgnoreCase("serialize"))
+                        .findFirst()
+                        .orElse(null);
+
+                if(IDynamicTag.class.isAssignableFrom(type) && method == null) { // If it's a tag we can use the base serialization method
+                    method = Arrays.stream(IDynamicTag.class.getDeclaredMethods()).filter(m -> m.getName().equalsIgnoreCase("serialize"))
+                            .findFirst()
+                            .orElse(null);
                 }
 
-                if(field.getType().equals(UUID.class)) {
-                    document.put(field.getName(), value.toString()); // Cannot put UUID objects in MongoDB...
-                    continue;
-                }
+                if (method != null) method.setAccessible(true);
 
-                SerializationMethod serializationMethod = field.isAnnotationPresent(Serialize.class)
-                        ? field.getAnnotation(Serialize.class).method()
-                        : SerializationMethod.OBJECT;
-
-                switch (serializationMethod) {
-                    case OBJECT -> {
-                        if(!(value instanceof Documentable)) continue;
-
-                        document.put(field.getName(), ((Documentable) value).asDocument());
-                    }
-                    case REFERENCE -> {
-                        if(value instanceof IDynamicTag) {
-                            document.put(field.getName(), ((IDynamicTag) value).getUniqueId().toString());
-                        }else {
-                            try {
-                                Method method = getSecretMethod(field.getType(), SerializationMethod.REFERENCE, "to"); // Try to find method automatically.
-                                if(method == null) continue;
-                                method.setAccessible(true);
-
-                                if(!method.isAnnotationPresent(DocumentableMethod.class))
-                                    throw new NoSuchMethodException(); // False trigger catch block.
-
-                                document.put(field.getName(), invokeMethod(method, value));
-                            }catch (NoSuchMethodException ignored) { }
+                final ArrayList<Object> array = new ArrayList<>();
+                for (final Object element : List.copyOf((List<?>) serialized)) { // Iterate over a copy of serialized to prevent modification exceptions.
+                    switch (serializationMethod) {
+                        case OBJECT -> {
+                            if(element instanceof Documentable documentable) {
+                                array.add(documentable.asDocument());
+                            }else if(element instanceof UUID uuid) {
+                                array.add(uuid.toString());
+                            }else array.add(element);
                         }
-                    }
-                    case STRING -> {
-                        try {
-                            Method method = getSecretMethod(field.getType(), SerializationMethod.STRING, "to"); // Try to find method automatically.
+                        default -> {
                             if(method == null) continue;
-                            method.setAccessible(true);
-
                             if(!method.isAnnotationPresent(DocumentableMethod.class))
-                                throw new NoSuchMethodException(); // False trigger catch block.
+                                throw new NoSuchMethodException(); // if the method is not annotated with DocumentableMethod, throw an exception
 
-                            document.put(field.getName(), invokeMethod(method, value));
-                        } catch (NoSuchMethodException exception) {
-                            document.put(field.getName(), value.toString());
+                            if(saveTags && element instanceof IDynamicTag tag)
+                                tag.saveSync(true);
+
+                            array.add(invokeMethod(method, element));
                         }
                     }
                 }
+
+                serialized = isArray || isList ? array : array.get(0);
+                if(serialized instanceof UUID uuid) serialized = uuid.toString();
+                document.append(field.getName(), serialized);
             }catch (Exception ignored) { }
         }
 
@@ -99,79 +98,83 @@ public interface Documentable {
     }
 
     /**
-     * Inserts a document into an existing instance of an object.
+     * Inserts a document into an existing object of an object.
      *
      * @param document The document to insert.
-     * @param instance The instance to insert the document into.
+     * @param object The object to insert the document into.
      */
-    static void insertDocument(@NotNull SystemManager manager, Document document, Object instance) {
-        List<Field> filteredFields = getTrueFields(instance.getClass());
+    static void insertDocument(@NotNull final SystemManager manager, @NotNull final Document document, @NotNull final Object object) {
+        final List<Field> fields = getFields(object.getClass());
 
-        for(Field field : filteredFields) {
+        for (final Field field : fields) {
             try {
                 field.setAccessible(true);
 
-                Object value = document.get(field.getName());
-                if (value == null) continue;
+                final Object value = document.get(field.getName());
+                if (value == null) continue; // If null no reason to continue.
+                Object deserialized = value;
 
-                SerializationMethod serializationMethod = field.isAnnotationPresent(Serialize.class)
-                        ? field.getAnnotation(Serialize.class).method()
-                        : SerializationMethod.OBJECT;
-
-                // Define our Setter methods
-                Method setter = Arrays.stream(instance.getClass().getDeclaredMethods())
-                        .filter(method -> method.getName().equalsIgnoreCase("set" + field.getName()))
+                final Method setter = Arrays.stream(object.getClass().getDeclaredMethods())
+                        .filter(m -> m.getName().equalsIgnoreCase("set" + field.getName()))
                         .findFirst().orElse(null);
 
-                if (isPrimitive(field.getType())) {
-                    if(setter == null) field.set(instance, value);
-                    else invokeMethod(setter, instance, value);
+                final boolean isArray = field.getType().isArray();
+                final boolean isList = List.class.isAssignableFrom(field.getType());
 
-                    continue;
+                final Serialize serializeAnnotation = field.isAnnotationPresent(Serialize.class) ? field.getAnnotation(Serialize.class) : null;
+                final SerializationMethod serializationMethod = serializeAnnotation != null ? serializeAnnotation.method() : SerializationMethod.OBJECT;
+                final Class<?> type = serializeAnnotation != null ? serializeAnnotation.type() != Object.class ? serializeAnnotation.type() : field.getType() : field.getType();
+
+                if(!(isArray || isList)) {
+                    deserialized = List.of(value);
                 }
 
-                if (field.getType().equals(UUID.class)) {
-                    if(setter == null) field.set(instance, UUID.fromString((String) value)); // Cannot put UUID objects in MongoDB...
-                    else invokeMethod(setter, instance, value);
+                // Attempt to find Documentable#fromX() method...
+                final Method method = Arrays.stream(type.getDeclaredMethods()).filter(m -> m.getName().equalsIgnoreCase("deserialize"))
+                        .findFirst()
+                        .orElse(null);
+                if (method != null) method.setAccessible(true);
 
-                    continue;
-                }
+                final ArrayList<Object> arrayList = new ArrayList<>();
+                for (final Object element : List.copyOf((List<?>) deserialized)) {
+                    switch (serializationMethod) {
+                        case OBJECT -> {
+                            if(element instanceof Document doc) {
+                                arrayList.add(Documentable.fromDocument(manager, doc, type));
+                                continue;
+                            }
 
-                switch (serializationMethod) {
-                    case OBJECT -> {
-                        if(!(value instanceof Documentable)) continue;
-
-                        if(setter == null) field.set(instance, ((Documentable) value).asDocument());
-                        else invokeMethod(setter, instance, ((Documentable) value).asDocument());
-                    }
-                    case REFERENCE -> {
-                        try {
-                            Method method = getSecretMethod(field.getType(), SerializationMethod.REFERENCE, "from"); // Try to find method automatically.
+                            arrayList.add(element);
+                        }
+                        default -> {
                             if(method == null) continue;
-                            method.setAccessible(true);
+                            if(!method.isAnnotationPresent(DocumentableMethod.class))
+                                throw new NoSuchMethodException();
 
-                            if (!method.isAnnotationPresent(DocumentableMethod.class) || !Arrays.asList(method.getParameterTypes()).contains(UUID.class))
-                                throw new NoSuchMethodException(); // False trigger catch block.
-
-                            if(value instanceof String) value = UUID.fromString((String) value);
-                            if(setter == null) field.set(instance, invokeMethod(method, null, manager, value));
-                            else invokeMethod(setter, instance, invokeMethod(method, null, manager, value));
-                        } catch (NoSuchMethodException ignored) { }
-                    }
-                    case STRING -> {
-                        try {
-                            Method method = getSecretMethod(field.getType(), SerializationMethod.STRING, "from"); // Try to find method automatically.
-                            if(method == null) continue;
-                            method.setAccessible(true);
-
-                            if(!method.isAnnotationPresent(DocumentableMethod.class))throw new NoSuchMethodException(); // False trigger catch block.
-
-                            if(setter == null) field.set(instance, invokeMethod(method, null, manager, value));
-                            else invokeMethod(setter, instance, invokeMethod(method, null, manager, value));
-                        } catch (NoSuchMethodException ignored) {  }
+                            arrayList.add(invokeMethod(method, null, manager, element));
+                        }
                     }
                 }
-            }catch (Exception ignored) { } //TODO: Add a notification for errors.
+
+                deserialized = arrayList;
+                if(isArray) {
+                  Object[] nonTypedArray = arrayList.toArray();
+
+                  Object typedArray = Array.newInstance(type, nonTypedArray.length);
+                  java.lang.System.arraycopy(nonTypedArray, 0, typedArray, 0, nonTypedArray.length);
+
+                  deserialized = typedArray;
+                } else if(!isList) deserialized = arrayList.get(0);
+
+                if(type.equals(UUID.class) && deserialized instanceof String string) {
+                    deserialized = UUID.fromString(string);
+                }
+
+                if (setter != null) invokeMethod(setter, object, deserialized);
+                else field.set(object, deserialized);
+            } catch (Exception ignored) {
+                ignored.printStackTrace();
+            }
         }
     }
 
@@ -182,46 +185,42 @@ public interface Documentable {
      * @param document The document to convert.
      * @param instance The instance to insert the document into.
      */
-    static @NotNull <T> T fromDocument(@NotNull SystemManager manager, Document document, Class<? extends T> instance) throws Exception {
+    static @NotNull <T> T fromDocument(@NotNull final SystemManager manager, @NotNull final Document document, @NotNull final Class<? extends T> instance) throws Exception {
         T object;
 
-        boolean isAssignable = Documentable.class.isAssignableFrom(instance);
-        Constructor<? extends T> constructor = isAssignable ? instance.getDeclaredConstructor(Mongo.class) : instance.getConstructor();
+        Constructor<? extends T>[] constructors = (Constructor<? extends T>[]) instance.getDeclaredConstructors();
+        Constructor<? extends T> constructor = null;
+
+        for (Constructor<? extends T> compare : constructors) {
+            if(!compare.isAnnotationPresent(DocumentableMethod.class)) continue;
+
+            constructor = compare;
+            break;
+        }
+
+        if(constructor == null)
+            constructor = instance.getDeclaredConstructor();
+
         constructor.setAccessible(true);
 
-        object = isAssignable ? constructor.newInstance(manager.search(Mongo.class)) : constructor.newInstance();
+        ArrayList<Object> parameters = new ArrayList<>();
+        for (Parameter parameter : constructor.getParameters()) {
+            int orginalSize = parameters.size();
+            Class<?> type = parameter.getType();
 
+            if (SystemManager.class.equals(type)) parameters.add(manager); // system manager
+            if (System.class.isAssignableFrom(type)) parameters.add(manager.search((Class<? extends System>) type)); // any system registered in the system manager
+            if (Document.class.equals(type)) parameters.add(document); // the document that created the object.
+
+            if(parameters.size() == orginalSize) parameters.add(null); // Default
+        }
+
+        object = parameters.isEmpty() ? constructor.newInstance() : constructor.newInstance(parameters.toArray());
         insertDocument(manager, document, object);
         return object;
     }
 
-    /**
-     * Privately invokes a given method and returns the result.
-     * (This is used to throw exceptions caused by the method invocation.)
-     *
-     * @param method The method to invoke.
-     * @param instance The instance to invoke the method on.
-     * @param parameters The parameters to pass to the method.
-     * @return The result of the method invocation.
-     */
-    private static Object invokeMethod(Method method, @Nullable Object instance, Object... parameters) {
-        Object value = null;
-
-        try { // Nested try-catch block to print any exception occurred while invoking the method.
-            value = method.invoke(instance, parameters);
-        }catch (Exception exception) { exception.printStackTrace(); }
-
-        return value;
-    }
-
-    /**
-     * Gets all the fields of a class, including the ones in the superclasses.
-     * Excludes static fields & optionally fields not annotated with {@link Serialize}.
-     *
-     * @param child The class to get the fields of.
-     * @return A list of all the fields.
-     */
-    private static List<Field> getTrueFields(Class<?> child) {
+    private static @NotNull List<Field> getFields(@NotNull final Class<?> child) {
         List<Field> arr = new ArrayList<>();
         Class<?> parent = child.getSuperclass();
 
@@ -234,9 +233,13 @@ public interface Documentable {
             try {
                 field.setAccessible(true);
 
-                if (Modifier.isStatic(field.getModifiers())) continue;
-                if (Modifier.isTransient(field.getModifiers())) continue;
-                if (field.getName().contains("$")) continue;
+                int modifiers = field.getModifiers();
+
+                if( // If the field is static, final, or transient, we don't want to include it in the document.
+                        Modifier.isStatic(modifiers)
+                                || Modifier.isTransient(modifiers)
+                                || field.getName().contains("$")
+                ) continue;
 
                 filteredFields.add(field);
 
@@ -247,77 +250,28 @@ public interface Documentable {
         return ImmutableList.copyOf(filteredFields);
     }
 
-    /**
-     * Gets all methods annotated by the inputted annotation.
-     *
-     * @param type The class to retrieve methods from..
-     * @param annotation The annotation to check for.
-     * @return A list of methods.
-     */
-    private static List<Method> getMethodsByAnnotation(Class<?> type, Class<? extends Annotation> annotation) {
-        List<Method> fields = new ArrayList<>();
+    private static @Nullable Object invokeMethod(@NotNull final Method method, @Nullable final Object instance, final Object... parameters) {
+        Object value = null;
 
-        for(Method method : type.getDeclaredMethods()) {
-            method.setAccessible(true);
+        try { // Nested try-catch block to print any exception occurred while invoking the method.
+            value = method.invoke(instance, parameters);
+        }catch (Exception exception) { exception.printStackTrace(); }
 
-            try {
-                if(!method.isAnnotationPresent(annotation))continue;
-
-                fields.add(method);
-            }catch (Exception ignored) { }
-        }
-
-        return fields;
+        return value;
     }
 
-
-    /**
-     * Finds all methods annotated by {@link DocumentableMethod} and returns the one with the inputted serialization method.
-     *
-     * @param type The class to retrieve methods from.
-     * @param serializationMethod The name of the method.
-     * @return The method, or null if none is found.
-     */
-    private static Method getSecretMethod(Class<?> type, SerializationMethod serializationMethod, @Nullable String prefix) {
-        List<Method> methods = getMethodsByAnnotation(type, DocumentableMethod.class);
-
-        for(Method method : methods) {
-            method.setAccessible(true);
-
-            if(method.getName().equalsIgnoreCase("_"+prefix+serializationMethod.name()))
-                return method;
-        }
-
-        return null;
-    }
-
-    private static boolean isPrimitive(Class<?> object) {
-        return object.isPrimitive() // Actual primitive types.
-                || object.equals(String.class)
-                || object.equals(Integer.class)
-                || object.equals(Long.class)
-                || object.equals(Double.class)
-                || object.equals(Float.class)
-                || object.equals(Boolean.class)
-                || object.equals(Byte.class)
-                || object.equals(Character.class)
-                || object.equals(Short.class)
-
-                // Aren't primitives, but are treated as such. (Naturally supported by MongoDB)
-                || object.isAssignableFrom(List.class)
-                || object.isAssignableFrom(Map.class);
-    }
-
-    Document asDocument();
+    @NotNull Document asDocument();
 
     enum SerializationMethod {
-        OBJECT(), REFERENCE(), STRING(), IGNORE()
+        OBJECT(), METHOD(), IGNORE()
     }
 
     @Target({ElementType.FIELD})
     @Retention(RetentionPolicy.RUNTIME)
     @interface Serialize {
         SerializationMethod method() default SerializationMethod.OBJECT;
+        Class<?> type() default Object.class;
+        boolean save() default false;
     }
 
 }

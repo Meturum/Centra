@@ -98,12 +98,12 @@ public final class ColorList {
     }
 
     @DocumentableMethod
-    private String _toString() {
+    private String serialize() {
         return "#" + Integer.toHexString(color.getRed()) + Integer.toHexString(color.getGreen()) + Integer.toHexString(color.getBlue());
     }
 
     @DocumentableMethod
-    private static ColorList _fromString(@NotNull SystemManager manager, @NotNull String string) {
+    private static ColorList deserialize(@NotNull SystemManager manager, @NotNull String string) {
         return ColorList.of(string);
     }
 
